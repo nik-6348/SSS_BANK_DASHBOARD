@@ -4,7 +4,7 @@ import os
 from dotenv import load_dotenv
 
 # Import page modules
-from pages import dashboard, visuals, chatbot, knowledge_base, settings
+from page_modules import dashboard, visuals, chatbot, knowledge_base
 
 # Load environment
 load_dotenv()
@@ -12,7 +12,7 @@ API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # Enhanced page config with better styling
 st.set_page_config(
-    page_title="🏦 Singaji Bank AI Dashboard", 
+    page_title="Singaji Bank AI Dashboard", 
     layout="wide",
     initial_sidebar_state="expanded",
     page_icon="🏦"
@@ -31,25 +31,22 @@ st.markdown("""
     
     /* Header Styling */
     .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem;
-        border-radius: 15px;
-        margin-bottom: 2rem;
-        color: white;
+        padding: 0.5rem;
+        border-radius: 10px;
         text-align: center;
-        box-shadow: 0 8px 32px rgba(102, 126, 234, 0.3);
+        box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
     }
     
-    .main-header h1 {
-        font-size: 2.5rem;
-        font-weight: 700;
+    .main-header h4 {
+        font-size: 1rem;
+        font-weight: 600;
         margin: 0;
-        text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     }
     
     .main-header p {
-        font-size: 1.1rem;
-        margin: 0.5rem 0 0 0;
+        font-size: 0.8rem;
+        margin: 0.3rem 0 0 0;
         opacity: 0.9;
     }
     
@@ -61,7 +58,7 @@ st.markdown("""
     
     .nav-item {
         padding: 0.75rem 1rem;
-        margin: 0.25rem 0;
+        # margin: 0.25rem 0;
         border-radius: 8px;
         cursor: pointer;
         transition: all 0.3s ease;
@@ -151,7 +148,8 @@ st.markdown("""
     
     /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
+        gap: 8px;
+        margin-bottom: 1rem;
     }
     
     .stTabs [data-baseweb="tab"] {
@@ -159,11 +157,16 @@ st.markdown("""
         white-space: pre-wrap;
         background: linear-gradient(135deg, #f0f2f6 0%, #e9ecef 100%);
         border-radius: 8px 8px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
+        padding: 12px 20px;
+        margin-right: 8px;
         font-weight: 500;
         transition: all 0.3s ease;
+        border: 2px solid transparent;
+    }
+    
+    .stTabs [data-baseweb="tab"]:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     }
     
     .stTabs [aria-selected="true"] {
@@ -220,13 +223,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Enhanced header
-st.markdown("""
-<div class="main-header">
-    <h1>🏦 Singaji Bank AI Dashboard</h1>
-    <p>🤖 AI-Powered Financial Intelligence & Analytics Platform</p>
-</div>
-""", unsafe_allow_html=True)
+# Header moved to sidebar
 
 # Initialize session state
 if "transactions" not in st.session_state:
@@ -242,9 +239,52 @@ if "messages" not in st.session_state:
 if "current_page" not in st.session_state:
     st.session_state.current_page = "Dashboard"
 
+# Auto-load existing knowledge base and transactions on app start
+if not st.session_state.rag_ready and os.path.exists("./chroma_db"):
+    try:
+        from utils.rag_engine import RAGEngine
+        
+        if API_KEY:
+            with st.spinner("🔄 Loading existing knowledge base..."):
+                # Initialize RAG engine
+                st.session_state.rag_engine = RAGEngine(API_KEY)
+                
+                # Load existing vectorstore
+                from langchain_chroma import Chroma
+                from langchain_google_genai import GoogleGenerativeAIEmbeddings
+                
+                embeddings = GoogleGenerativeAIEmbeddings(
+                    model="models/embedding-001",
+                    google_api_key=API_KEY
+                )
+                db = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
+                
+                # Set up the vectorstore in RAG engine
+                st.session_state.rag_engine.vectorstore = db
+                st.session_state.rag_engine._setup_qa_chain()
+                st.session_state.rag_ready = True
+                
+                # Try to load transactions from saved CSV if exists
+                if os.path.exists("transactions_backup.csv"):
+                    try:
+                        st.session_state.transactions = pd.read_csv("transactions_backup.csv")
+                        st.session_state.transactions['Date'] = pd.to_datetime(st.session_state.transactions['Date'])
+                        # st.success(f"✅ Loaded {len(st.session_state.transactions)} transactions from backup!")
+                    except Exception as e:
+                        st.warning(f"Could not load saved transactions: {e}")
+                        
+    except Exception as e:
+        st.warning(f"Could not auto-load knowledge base: {e}")
+
 # Enhanced Sidebar Navigation
 with st.sidebar:
-    st.markdown("### 🧭 Navigation")
+    # Header in sidebar
+    st.markdown("""
+    <div class="main-header">
+        <h4>🏦 Singaji Bank AI Dashboard</h4>
+    </div>
+    """, unsafe_allow_html=True)
+    
     st.markdown("---")
     
     # Navigation items with enhanced styling
@@ -252,8 +292,7 @@ with st.sidebar:
         ("📊 Dashboard", "Dashboard"),
         ("📈 Visualizations", "Visuals"),
         ("🤖 AI Chatbot", "Chatbot"),
-        ("🧠 Knowledge Base", "Knowledge Base"),
-        ("⚙️ Settings", "Settings")
+        ("🧠 Knowledge Base", "Knowledge Base")
     ]
     
     # Create navigation buttons
@@ -264,7 +303,7 @@ with st.sidebar:
         if st.button(
             icon_text, 
             key=f"nav_{page_key}",
-            use_container_width=True,
+            width='stretch',
             type="primary" if is_active else "secondary"
         ):
             st.session_state.current_page = page_key
@@ -272,40 +311,52 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Knowledge Base Status with enhanced styling
-    st.markdown("### 🧠 Knowledge Base")
-    if st.session_state.rag_ready:
-        st.markdown("""
-        <div class="status-indicator status-active"></div>
-        <span style="color: #28a745; font-weight: 500;">✅ Active</span>
-        """, unsafe_allow_html=True)
+    # # Knowledge Base Status with enhanced styling
+    # st.markdown("### 🧠 Knowledge Base")
+    # if st.session_state.rag_ready:
+    #     st.markdown("""
+    #     <div class="status-indicator status-active"></div>
+    #     <span style="color: #28a745; font-weight: 500;">✅ Active</span>
+    #     """, unsafe_allow_html=True)
         
-        if not st.session_state.transactions.empty:
-            st.markdown(f"📊 **{len(st.session_state.transactions)}** transactions loaded")
-    else:
-        st.markdown("""
-        <div class="status-indicator status-inactive"></div>
-        <span style="color: #dc3545; font-weight: 500;">⏳ Not initialized</span>
-        """, unsafe_allow_html=True)
+    #     if not st.session_state.transactions.empty:
+    #         st.markdown(f"📊 **{len(st.session_state.transactions)}** transactions loaded")
+    # else:
+    #     st.markdown("""
+    #     <div class="status-indicator status-inactive"></div>
+    #     <span style="color: #dc3545; font-weight: 500;">⏳ Not initialized</span>
+    #     """, unsafe_allow_html=True)
     
-    st.markdown("---")
+    # st.markdown("---")
     
-    # Quick Stats with enhanced styling
-    if not st.session_state.transactions.empty:
-        st.markdown("### 📈 Quick Stats")
+    # # Quick Stats with enhanced styling
+    # if not st.session_state.transactions.empty:
+    #     st.markdown("### 📈 Quick Stats")
         
-        txns = st.session_state.transactions
-        total_spent = txns[txns["Type"] == "debit"]["Amount"].sum()
-        total_received = txns[txns["Type"] == "credit"]["Amount"].sum()
+    #     txns = st.session_state.transactions
+    #     total_spent = txns[txns["Type"] == "debit"]["Amount"].sum()
+    #     total_received = txns[txns["Type"] == "credit"]["Amount"].sum()
         
-        st.metric("💰 Total Spent", f"₹{total_spent:,.2f}")
-        st.metric("💵 Total Received", f"₹{total_received:,.2f}")
-        st.metric("📝 Transactions", len(txns))
+    #     st.metric("💰 Total Spent", f"₹{total_spent:,.2f}")
+    #     st.metric("💵 Total Received", f"₹{total_received:,.2f}")
+    #     st.metric("📝 Transactions", len(txns))
         
-        # Balance calculation
-        balance = total_received - total_spent
-        balance_color = "normal" if balance >= 0 else "inverse"
-        st.metric("💳 Net Balance", f"₹{balance:,.2f}", delta=None)
+    #     # Balance calculation
+    #     balance = total_received - total_spent
+    #     balance_color = "normal" if balance >= 0 else "inverse"
+    #     st.metric("💳 Net Balance", f"₹{balance:,.2f}", delta=None)
+    
+    # st.markdown("---")
+    
+    # Footer in sidebar
+    st.markdown("""
+    <div style="text-align: center; color: #666; padding: 1rem; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border-radius: 12px; margin-top: 1rem;">
+        <h4 style="margin: 0; color: #667eea;">🏦 Singaji Bank AI Dashboard</h4>
+        <p style="margin: 0.5rem 0; font-size: 0.9rem;">
+            🤖 Powered by Gemini AI | 💡 Built with Streamlit | 🔒 Secure & Private
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
 # Main Content Area with enhanced routing
 if st.session_state.current_page == "Dashboard":
@@ -316,19 +367,5 @@ elif st.session_state.current_page == "Chatbot":
     chatbot.render_chatbot()
 elif st.session_state.current_page == "Knowledge Base":
     knowledge_base.render_knowledge_base()
-elif st.session_state.current_page == "Settings":
-    settings.render_settings()
 
-# Enhanced Footer
-st.markdown("---")
-st.markdown("""
-<div style="text-align: center; color: #666; padding: 2rem; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border-radius: 12px; margin-top: 2rem;">
-    <h4 style="margin: 0; color: #667eea;">🏦 Singaji Bank AI Dashboard</h4>
-    <p style="margin: 0.5rem 0; font-size: 0.9rem;">
-        🤖 Powered by Gemini AI | 💡 Built with Streamlit | 🔒 Secure & Private
-    </p>
-    <p style="margin: 0; font-size: 0.8rem; opacity: 0.7;">
-        <em>All data is processed securely and stored locally on your device.</em>
-    </p>
-</div>
-""", unsafe_allow_html=True)
+# Footer moved to sidebar

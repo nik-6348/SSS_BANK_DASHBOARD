@@ -14,12 +14,12 @@ API_KEY = os.getenv("GOOGLE_API_KEY")
 
 def render_dashboard():
     """Render the enhanced dashboard page with integrated search"""
-    st.header("📊 Dashboard & Search")
+    # st.header("📊 Dashboard & Search")
     
-    # Check if knowledge base exists
-    if not st.session_state.rag_ready or st.session_state.transactions.empty:
+    # Check if we have transaction data
+    if st.session_state.transactions.empty:
         # Show message to upload to knowledge base first
-        st.warning("📋 **No Data Available**")
+        st.warning("📋 **No Transaction Data Available**")
         st.info("""
         **Please upload bank statements to the Knowledge Base first!**
         
@@ -157,7 +157,7 @@ def render_dashboard():
 def init_rag_automatically(df):
     """Auto-initialize RAG system with transaction data"""
     from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-    from langchain_community.vectorstores import Chroma
+    from langchain_chroma import Chroma
     from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
     from langchain_core.documents import Document
     
@@ -189,129 +189,157 @@ def init_rag_automatically(df):
     st.session_state.rag_ready = True
 
 def _process_nlp_query(df, query):
-    """Process natural language queries to filter transactions using both rule-based and AI-powered search."""
+    """Process natural language queries using Gemini AI for intelligent filtering."""
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    
+    if not API_KEY:
+        st.error("API Key not configured for AI-powered search.")
+        return pd.DataFrame()
+    
+    try:
+        # Use Gemini AI to understand the query and generate filtering criteria
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash-exp",
+            google_api_key=API_KEY,
+            temperature=0.1
+        )
+        
+        # Create a detailed prompt for the AI to understand the query
+        ai_prompt = f"""
+        You are a financial data analyst. I have a DataFrame with columns: Date, Type (debit/credit), Category, Amount, Description.
+        
+        User Query: "{query}"
+        
+        Based on this query, I need you to return a JSON response with filtering criteria. The response should be in this exact format:
+        
+        {{
+            "filters": {{
+                "date_range": {{"start": "YYYY-MM-DD or null", "end": "YYYY-MM-DD or null"}},
+                "amount_range": {{"min": "number or null", "max": "number or null"}},
+                "transaction_types": ["debit", "credit"] or ["debit"] or ["credit"] or [],
+                "categories": ["category1", "category2"] or [],
+                "description_keywords": ["keyword1", "keyword2"] or [],
+                "amount_conditions": {{"above": "number or null", "below": "number or null", "exactly": "number or null"}}
+            }},
+            "explanation": "Brief explanation of what the query is looking for"
+        }}
+        
+        Examples:
+        - "transactions above 5000" -> {{"amount_conditions": {{"above": 5000}}}}
+        - "food expenses in december" -> {{"categories": ["food"], "date_range": {{"start": "2024-12-01", "end": "2024-12-31"}}}}
+        - "all debit transactions" -> {{"transaction_types": ["debit"]}}
+        
+        Only return the JSON, no other text.
+        """
+        
+        with st.spinner("🤖 AI is analyzing your query..."):
+            ai_response = llm.invoke(ai_prompt)
+        
+        # Parse AI response
+        import json
+        try:
+            # Extract JSON from response
+            response_text = ai_response.content.strip()
+            if response_text.startswith("```json"):
+                response_text = response_text.replace("```json", "").replace("```", "").strip()
+            elif response_text.startswith("```"):
+                response_text = response_text.replace("```", "").strip()
+            
+            criteria = json.loads(response_text)
+            filters = criteria.get("filters", {})
+            explanation = criteria.get("explanation", "AI-powered search")
+            
+            st.info(f"🤖 AI Analysis: {explanation}")
+            
+        except json.JSONDecodeError:
+            st.warning("AI response could not be parsed. Using fallback search.")
+            return _fallback_search(df, query)
+        
+        # Apply AI-generated filters
+        filtered_df = df.copy()
+        
+        # Date range filter
+        date_range = filters.get("date_range", {})
+        if date_range.get("start") and date_range.get("end"):
+            try:
+                start_date = pd.to_datetime(date_range["start"])
+                end_date = pd.to_datetime(date_range["end"])
+                filtered_df = filtered_df[
+                    (filtered_df['Date'] >= start_date) & 
+                    (filtered_df['Date'] <= end_date)
+                ]
+            except Exception:
+                pass
+        
+        # Amount range filter
+        amount_range = filters.get("amount_range", {})
+        if amount_range.get("min") is not None:
+            filtered_df = filtered_df[filtered_df['Amount'] >= amount_range["min"]]
+        if amount_range.get("max") is not None:
+            filtered_df = filtered_df[filtered_df['Amount'] <= amount_range["max"]]
+        
+        # Transaction type filter
+        transaction_types = filters.get("transaction_types", [])
+        if transaction_types:
+            filtered_df = filtered_df[filtered_df['Type'].isin(transaction_types)]
+        
+        # Category filter
+        categories = filters.get("categories", [])
+        if categories:
+            filtered_df = filtered_df[filtered_df['Category'].isin(categories)]
+        
+        # Description keywords filter
+        keywords = filters.get("description_keywords", [])
+        if keywords:
+            keyword_mask = pd.Series([False] * len(filtered_df))
+            for keyword in keywords:
+                keyword_mask |= filtered_df['Description'].str.contains(keyword, case=False, na=False)
+            filtered_df = filtered_df[keyword_mask]
+        
+        # Amount conditions
+        amount_conditions = filters.get("amount_conditions", {})
+        if amount_conditions.get("above") is not None:
+            filtered_df = filtered_df[filtered_df['Amount'] > amount_conditions["above"]]
+        if amount_conditions.get("below") is not None:
+            filtered_df = filtered_df[filtered_df['Amount'] < amount_conditions["below"]]
+        if amount_conditions.get("exactly") is not None:
+            filtered_df = filtered_df[filtered_df['Amount'] == amount_conditions["exactly"]]
+        
+        return filtered_df
+        
+    except Exception as e:
+        st.warning(f"AI search encountered an issue: {str(e)}. Using fallback search.")
+        return _fallback_search(df, query)
+
+def _fallback_search(df, query):
+    """Fallback rule-based search when AI fails"""
     query_lower = query.lower()
     filtered_df = df.copy()
     
-    # First try AI-powered similarity search if RAG is available
-    if hasattr(st.session_state, 'rag_ready') and st.session_state.rag_ready:
-        try:
-            # Use AI to understand the query intent
-            ai_query = f"Find transactions related to: {query}"
-            similar_docs = st.session_state.vectorstore.similarity_search(ai_query, k=15)
-            
-            # Extract relevant transaction indices
-            similar_indices = set()
-            for doc in similar_docs:
-                # Parse the document content to find matching transactions
-                doc_content = doc.page_content.lower()
-                
-                # Match by description keywords
-                for idx, row in df.iterrows():
-                    desc_words = str(row['Description']).lower().split()
-                    doc_words = doc_content.split()
-                    
-                    # Check for common words between description and AI result
-                    common_words = set(desc_words) & set(doc_words)
-                    if len(common_words) >= 2:  # At least 2 common words
-                        similar_indices.add(idx)
-            
-            # If we found similar transactions through AI, use them
-            if similar_indices:
-                ai_filtered = df.iloc[list(similar_indices)]
-                filtered_df = ai_filtered  # Start with AI results
-                st.info(f"🤖 AI found {len(ai_filtered)} potentially relevant transactions")
-        except Exception as e:
-            st.warning(f"AI search encountered an issue: {str(e)}. Using rule-based filtering only.")
-            filtered_df = df.copy()
-    
-    # Rule-based filtering (original logic)
-    
-    # Date range parsing
-    date_patterns = [
-        r'from (\w+ \d+) to (\w+ \d+)',
-        r'(\w+ \d+) to (\w+ \d+)',
-        r'between (\w+ \d+) and (\w+ \d+)',
-        r'from (\d+ \w+) to (\d+ \w+)',
-        r'(\d+ \w+) to (\d+ \w+)'
-    ]
-    
-    for pattern in date_patterns:
-        match = re.search(pattern, query_lower)
-        if match:
-            try:
-                start_str, end_str = match.groups()
-                # Simple date parsing (you can make this more sophisticated)
-                if 'oct' in start_str and 'nov' in end_str:
-                    filtered_df = filtered_df[filtered_df['Date'].dt.month.isin([10, 11])]
-                elif 'dec' in start_str and 'dec' in end_str:
-                    filtered_df = filtered_df[filtered_df['Date'].dt.month == 12]
-                break
-            except Exception:
-                continue
-    
-    # Transaction type parsing
+    # Simple keyword matching
     if 'debit' in query_lower:
         filtered_df = filtered_df[filtered_df['Type'] == 'debit']
     elif 'credit' in query_lower:
         filtered_df = filtered_df[filtered_df['Type'] == 'credit']
     
-    # Amount parsing - Fixed regex patterns
+    # Amount patterns
+    import re
     amount_patterns = [
-        r'above\s+(\d+)',
-        r'over\s+(\d+)',
-        r'more\s+than\s+(\d+)',
-        r'greater\s+than\s+(\d+)',
-        r'(\d+)\s*\+',  # For patterns like "5000+"
-        r'₹?(\d+)\s*above',
-        r'₹?(\d+)\s*over'
+        r'above\s+(\d+)', r'over\s+(\d+)', r'more\s+than\s+(\d+)',
+        r'below\s+(\d+)', r'under\s+(\d+)', r'less\s+than\s+(\d+)'
     ]
     
     for pattern in amount_patterns:
-        amount_match = re.search(pattern, query_lower)
-        if amount_match:
+        match = re.search(pattern, query_lower)
+        if match:
             try:
-                amount = float(amount_match.group(1))
-                filtered_df = filtered_df[filtered_df['Amount'] > amount]
+                amount = float(match.group(1))
+                if 'above' in pattern or 'over' in pattern or 'more' in pattern:
+                    filtered_df = filtered_df[filtered_df['Amount'] > amount]
+                else:
+                    filtered_df = filtered_df[filtered_df['Amount'] < amount]
                 break
             except (ValueError, AttributeError):
                 continue
-    
-    # Below amount patterns
-    below_patterns = [
-        r'below\s+(\d+)',
-        r'under\s+(\d+)',
-        r'less\s+than\s+(\d+)',
-        r'(\d+)\s*-',  # For patterns like "5000-"
-        r'₹?(\d+)\s*below',
-        r'₹?(\d+)\s*under'
-    ]
-    
-    for pattern in below_patterns:
-        amount_match = re.search(pattern, query_lower)
-        if amount_match:
-            try:
-                amount = float(amount_match.group(1))
-                filtered_df = filtered_df[filtered_df['Amount'] < amount]
-                break
-            except (ValueError, AttributeError):
-                continue
-    
-    # Enhanced category parsing
-    category_keywords = {
-        'food': ['food', 'restaurant', 'dining', 'grocery', 'eat', 'meal', 'cafe', 'kitchen'],
-        'transport': ['transport', 'travel', 'taxi', 'uber', 'bus', 'train', 'flight', 'petrol', 'fuel'],
-        'shopping': ['shopping', 'mall', 'store', 'amazon', 'flipkart', 'purchase', 'buy'],
-        'entertainment': ['entertainment', 'movie', 'cinema', 'game', 'netflix', 'spotify', 'music'],
-        'utilities': ['utilities', 'electricity', 'water', 'gas', 'internet', 'phone', 'bill'],
-        'healthcare': ['healthcare', 'hospital', 'doctor', 'medical', 'pharmacy', 'medicine'],
-        'salary': ['salary', 'income', 'credit', 'deposit', 'bonus', 'payroll'],
-        'transfer': ['transfer', 'sent', 'received', 'payment', 'loan', 'emi']
-    }
-    
-    for category, keywords in category_keywords.items():
-        if any(keyword in query_lower for keyword in keywords):
-            filtered_df = filtered_df[filtered_df['Category'] == category]
-            break
     
     return filtered_df

@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 import plotly.express as px
 
 def render_visuals():
@@ -12,7 +11,23 @@ def render_visuals():
     
     txns = st.session_state.transactions.copy()
     
-    # Enhanced visualization tabs with better styling
+    # Enhanced visualization tabs with better styling and spacing
+    st.markdown("""
+    <style>
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 12px !important;
+        margin-bottom: 1.5rem !important;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        padding: 15px 25px !important;
+        margin-right: 12px !important;
+        border-radius: 10px !important;
+        font-size: 14px !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     viz_tab1, viz_tab2, viz_tab3, viz_tab4 = st.tabs([
         "💰 Spending Analysis", 
         "📊 Category Breakdown", 

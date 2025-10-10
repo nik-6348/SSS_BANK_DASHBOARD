@@ -1,5 +1,5 @@
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -130,3 +130,19 @@ Context from bank statement:
             return []
         
         return self.vectorstore.similarity_search(query, k=k)
+    
+    def clear_memory(self):
+        """
+        Clear the vectorstore and reset the RAG engine.
+        """
+        if self.vectorstore is not None:
+            try:
+                # Clear the collection
+                collection = self.vectorstore._collection
+                collection.delete()
+                self.vectorstore = None
+                self.qa_chain = None
+            except Exception as e:
+                print(f"Warning: Could not clear vectorstore: {e}")
+                self.vectorstore = None
+                self.qa_chain = None
